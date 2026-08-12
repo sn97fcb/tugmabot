@@ -185,3 +185,11 @@ async def other(message: Message):
     await message.answer(
         "❌ Faqat rasm + matn (caption) yuboring."
     )
+
+
+@router.channel_post()
+async def channel_id(message: Message):
+    print(
+        f"CHANNEL: {message.chat.title} | "
+        f"ID: {message.chat.id}"
+    )
