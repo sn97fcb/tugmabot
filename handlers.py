@@ -8,6 +8,24 @@ from keyboards import make_buttons
 router = Router()
 
 
+# ==================================================
+# FAQAT SHU 4 TA AKKAUNT FOYDALANA OLADI
+# ==================================================
+
+ADMIN_IDS = {
+    1255705034,
+    6201110478,
+    6960879913,
+    6683769327
+}
+
+
+# Begona foydalanuvchilar uchun hech qanday javob bermaydi
+@router.message(lambda message: message.from_user.id not in ADMIN_IDS)
+async def blocked_user(message: Message):
+    return
+
+
 def get_links(user_id):
     cursor.execute(
         "SELECT qoida, viloyat, elon FROM users WHERE user_id=?",
@@ -149,6 +167,7 @@ async def show(message: Message):
         f"✅ {elon}"
     )
 
+
 @router.message(lambda message: message.photo)
 async def photo_handler(message: Message):
 
@@ -179,17 +198,10 @@ async def photo_handler(message: Message):
         )
     )
 
+
 @router.message()
 async def other(message: Message):
 
     await message.answer(
         "❌ Faqat rasm + matn (caption) yuboring."
-    )
-
-
-@router.channel_post()
-async def channel_id(message: Message):
-    print(
-        f"CHANNEL: {message.chat.title} | "
-        f"ID: {message.chat.id}"
     )
