@@ -6,18 +6,12 @@ def make_buttons(qoida, viloyat, elon):
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="📜 Kanal qoidasi",
-                    url=qoida
+                    text="📩 Еълон жойлаш",
+                    url=elon
                 ),
                 InlineKeyboardButton(
-                    text="🌍 Boshqa viloyatlar",
-                    url=viloyat
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="✅ E'lon joylash",
-                    url=elon
+                    text="❗️ Канал қоидаси",
+                    url=qoida
                 )
             ]
         ]
