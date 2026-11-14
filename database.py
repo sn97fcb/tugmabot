@@ -1,3 +1,4 @@
+
 import sqlite3
 
 db = sqlite3.connect("tugmabot.db")
@@ -11,5 +12,12 @@ CREATE TABLE IF NOT EXISTS users(
     elon TEXT
 )
 """)
+
+# Eski bazaga yangi ustun qo‘shish
+cursor.execute("PRAGMA table_info(users)")
+columns = [column[1] for column in cursor.fetchall()]
+
+if "matnlink" not in columns:
+    cursor.execute("ALTER TABLE users ADD COLUMN matnlink TEXT")
 
 db.commit()
