@@ -82,7 +82,7 @@ async def set_qoida(message: Message):
         (parts[1].strip(), message.from_user.id)
     )
 
-    db.commit()
+db.commit()
     await message.answer("✅ Qoida linki saqlandi.")
 
 
@@ -109,11 +109,23 @@ async def set_viloyat(message: Message):
     await message.answer("✅ Viloyatlar linki saqlandi.")
 
 
+@router.message(Command("viloyat_off"))
+async def delete_viloyat(message: Message):
+
+    cursor.execute(
+        "UPDATE users SET viloyat=NULL WHERE user_id=?",
+        (message.from_user.id,)
+    )
+
+    db.commit()
+
+    await message.answer("✅ Viloyat tugmasi o'chirildi.")
+
+
 @router.message(Command("elon"))
 async def set_elon(message: Message):
 
     parts = message.text.split(maxsplit=1)
-
     if len(parts) != 2:
         await message.answer("Misol:\n/elon https://t.me/kanal")
         return
