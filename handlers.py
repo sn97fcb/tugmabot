@@ -120,7 +120,31 @@ async def delete_viloyat(message: Message):
     db.commit()
 
     await message.answer("✅ Viloyat tugmasi o'chirildi.")
+    
+@router.message(Command("elon_off"))
+async def delete_elon(message: Message):
 
+    cursor.execute(
+        "UPDATE users SET elon=NULL WHERE user_id=?",
+        (message.from_user.id,)
+    )
+
+    db.commit()
+
+    await message.answer("✅ E'lon tugmasi o'chirildi.")
+
+
+@router.message(Command("qoida_off"))
+async def delete_qoida(message: Message):
+
+    cursor.execute(
+        "UPDATE users SET qoida=NULL WHERE user_id=?",
+        (message.from_user.id,)
+    )
+
+    db.commit()
+
+    await message.answer("✅ Qoida tugmasi o'chirildi.")
 
 @router.message(Command("elon"))
 async def set_elon(message: Message):
