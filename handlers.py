@@ -83,7 +83,7 @@ async def set_qoida(message: Message):
     )
 
 db.commit()
-    await message.answer("✅ Qoida linki saqlandi.")
+await message.answer("✅ Qoida linki saqlandi.")
 
 
 @router.message(Command("viloyat"))
