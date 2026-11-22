@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from html import escape
 
 from aiogram import F, Router
@@ -27,6 +27,8 @@ class Wizard(StatesGroup):
     recurring_time = State()
     channel_add = State()
     confirm = State()
+    duration = State()
+    interval = State()
     edit_text = State()
     edit_photo = State()
     edit_time = State()
@@ -291,12 +293,45 @@ async def receive_post(message: Message, state: FSMContext):
         await message.answer(f"Telegram bu post turi uchun {limit} belgigacha qabul qiladi. Matnni qisqartiring.")
         return
     await state.update_data(text=content, photo_file_id=message.photo[-1].file_id if message.photo else None)
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Bir marta 📅", callback_data="schedule:once")],
-        [InlineKeyboardButton(text="Har kuni 🔁", callback_data="schedule:daily")],
-        [InlineKeyboardButton(text="Hafta kunlari 🔁", callback_data="schedule:weekly")],
-    ])
-    await message.answer("Joylash turini tanlang:", reply_markup=keyboard)
+    durations = [1, 2, 3, 5, 7, 10, 15, 30]
+    rows = [
+        [InlineKeyboardButton(text=f"{days} kun", callback_data=f"duration:{days}")
+         for days in durations[index:index + 2]]
+        for index in range(0, len(durations), 2)
+    ]
+    await state.set_state(Wizard.duration)
+    await message.answer("E’lon necha kun davom etsin? Muddatni tanlang:",
+                         reply_markup=InlineKeyboardMarkup(inline_keyboard=rows))
+
+
+@router.callback_query(Wizard.duration, F.data.startswith("duration:"))
+async def choose_duration(call: CallbackQuery, state: FSMContext):
+    duration = int(call.data.split(":")[1])
+    if duration not in {1, 2, 3, 5, 7, 10, 15, 30}:
+        await call.answer("Muddat noto‘g‘ri", show_alert=True)
+        return
+    await state.update_data(occurrences_total=duration)
+    await state.set_state(Wizard.interval)
+    await call.message.edit_text(
+        f"{duration} kunlik muddat tanlandi. Qanday joylansin?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="Har kuni", callback_data="interval:1")],
+            [InlineKeyboardButton(text="Kun ora", callback_data="interval:2")],
+        ]),
+    )
+    await call.answer()
+
+
+@router.callback_query(Wizard.interval, F.data.startswith("interval:"))
+async def choose_interval(call: CallbackQuery, state: FSMContext):
+    interval_days = int(call.data.split(":")[1])
+    if interval_days not in {1, 2}:
+        await call.answer("Takrorlanish turi noto‘g‘ri", show_alert=True)
+        return
+    await state.update_data(interval_days=interval_days, schedule_type="daily")
+    await state.set_state(Wizard.recurring_time)
+    await call.message.answer("Joylash vaqtini Toshkent vaqti bilan bir marta kiriting: HH:MM")
+    await call.answer()
 
 
 @router.callback_query(F.data == "schedule:once")
@@ -316,9 +351,16 @@ async def repeat_prompt(call: CallbackQuery, state: FSMContext):
     await call.answer()
 
 
-async def _confirm_post(message: Message, state: FSMContext, schedule_type: str, run_at=None, weekdays=None, run_time=None):
+async def _confirm_post(message: Message, state: FSMContext, schedule_type: str, run_at=None,
+                        weekdays=None, run_time=None, duration=None, interval_days=1,
+                        next_run_at=None):
     data = await state.get_data()
-    if run_at:
+    if duration is not None:
+        if interval_days == 1:
+            when = f"{duration} kun, har kuni soat {run_time}"
+        else:
+            when = f"{duration} marta, kun ora (taxminan {duration * 2} kun), soat {run_time}"
+    elif run_at:
         when = run_at
     elif schedule_type == "daily":
         when = f"Har kuni {run_time}"
@@ -326,7 +368,9 @@ async def _confirm_post(message: Message, state: FSMContext, schedule_type: str,
         names = {0: "Du", 1: "Se", 2: "Ch", 3: "Pa", 4: "Ju", 5: "Sh", 6: "Ya"}
         times = __import__("json").loads(run_time)
         when = ", ".join(f"{names[int(day)]} {value}" for day, value in times.items())
-    await state.update_data(schedule_type=schedule_type, run_at=run_at, weekdays=weekdays or [], run_time=run_time)
+    await state.update_data(schedule_type=schedule_type, run_at=run_at, weekdays=weekdays or [],
+                            run_time=run_time, occurrences_total=duration,
+                            interval_days=interval_days, next_run_at=next_run_at)
     await state.set_state(Wizard.confirm)
     preview = escape(data["text"])
     _, _, _, textlink = database.get_links(message.from_user.id)
@@ -348,16 +392,27 @@ async def _confirm_post(message: Message, state: FSMContext, schedule_type: str,
 
 @router.callback_query(Wizard.confirm, F.data == "post:confirm")
 async def confirm_post(call: CallbackQuery, state: FSMContext):
+    await call.answer("E’lon rejalashtirilmoqda")
     data = await state.get_data()
     post_id = database.create_post(
         call.from_user.id, data["text"], data["photo_file_id"], data["schedule_type"],
         data["selected"], data["run_at"], data["weekdays"], data["run_time"],
+        occurrences_total=data.get("occurrences_total"),
+        interval_days=data.get("interval_days", 1),
+        next_run_at=data.get("next_run_at"),
     )
     post, _ = database.get_post(post_id, call.from_user.id)
     schedule_post(call.bot, post)
     await state.clear()
-    await call.message.edit_text(f"✅ E’lon #{post_id} jadvalga qo‘shildi.")
-    await call.answer()
+    success = f"✅ Tasdiqlandi. E’lon #{post_id} rejaga qo‘shildi."
+    if call.message.photo:
+        await call.message.edit_caption(caption=success, reply_markup=None)
+    else:
+        await call.message.edit_text(success, reply_markup=None)
+    await call.message.answer(
+        "📅 Rejadagi e’lonlar bo‘limidan holatini ko‘rishingiz mumkin.",
+        reply_markup=main_menu(),
+    )
 
 
 @router.callback_query(Wizard.confirm, F.data == "post:cancel")
@@ -383,24 +438,17 @@ async def save_once(message: Message, state: FSMContext):
 async def save_repeat(message: Message, state: FSMContext):
     data = await state.get_data()
     try:
-        if data["schedule_type"] == "daily":
-            run_time = datetime.strptime(message.text.strip(), "%H:%M").strftime("%H:%M")
-            weekdays = []
-        else:
-            labels = {"du": 0, "se": 1, "ch": 2, "pa": 3, "ju": 4, "sh": 5, "ya": 6}
-            schedule = {}
-            for item in message.text.split(","):
-                day, time_value = item.split("=", maxsplit=1)
-                weekday = labels[day.strip().lower()]
-                schedule[str(weekday)] = datetime.strptime(time_value.strip(), "%H:%M").strftime("%H:%M")
-            weekdays = sorted(int(day) for day in schedule)
-            run_time = __import__("json").dumps(schedule)
-            if not weekdays:
-                raise ValueError
+        run_time = datetime.strptime(message.text.strip(), "%H:%M").strftime("%H:%M")
     except (ValueError, KeyError, AttributeError):
-        await message.answer("Vaqt yoki hafta kuni noto‘g‘ri. Masalan: Du=09:30,Pa=18:00")
+        await message.answer("Vaqt noto‘g‘ri. HH:MM ko‘rinishida yuboring, masalan 09:30.")
         return
-    await _confirm_post(message, state, data["schedule_type"], weekdays=weekdays, run_time=run_time)
+    now = datetime.now(TASHKENT)
+    first_run = datetime.combine(now.date(), datetime.strptime(run_time, "%H:%M").time()).replace(tzinfo=TASHKENT)
+    if first_run <= now:
+        first_run += timedelta(days=1)
+    await _confirm_post(message, state, data["schedule_type"], run_time=run_time,
+                        duration=data["occurrences_total"], interval_days=data["interval_days"],
+                        next_run_at=first_run.isoformat())
 
 
 @router.message(F.text == "📅 Rejadagi e'lonlar")
@@ -410,6 +458,25 @@ async def list_posts(message: Message):
         await message.answer("Rejalashtirilgan e’lon yo‘q.")
         return
     for post in posts:
+        status_labels = {
+            "pending": "Kutilmoqda", "active": "Faol", "paused": "To‘xtatilgan",
+            "published": "Joylandi", "error": "Xatolik",
+        }
+        if post["occurrences_total"] is not None:
+            interval_text = "har kuni" if post["interval_days"] == 1 else "kun ora"
+            approx_days = post["occurrences_total"] * post["interval_days"]
+            schedule_text = (
+                f"{post['occurrences_sent']}/{post['occurrences_total']} marta · {interval_text} · "
+                f"taxminan {approx_days} kun · soat {post['run_time']}"
+            )
+            if post["next_run_at"]:
+                schedule_text += f"\nKeyingi: {post['next_run_at']}"
+        elif post["schedule_type"] == "once":
+            schedule_text = f"Bir marta · {post['run_at']}"
+        elif post["schedule_type"] == "weekly":
+            schedule_text = f"Hafta jadvali · {post['run_time']}"
+        else:
+            schedule_text = f"Har kuni · {post['run_time']}"
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="⏸/▶️", callback_data=f"post:toggle:{post['id']}"),
             InlineKeyboardButton(text="📤 Hozir", callback_data=f"post:now:{post['id']}"),
@@ -420,7 +487,10 @@ async def list_posts(message: Message):
             InlineKeyboardButton(text="📅 Vaqt", callback_data=f"post:edit_time:{post['id']}"),
             InlineKeyboardButton(text="📍 Kanallar", callback_data=f"post:channels:{post['id']}"),
         ]])
-        await message.answer(f"E’lon #{post['id']} · {post['schedule_type']} · {post['status']}\n{post['text'][:300]}", reply_markup=keyboard)
+        await message.answer(
+            f"E’lon #{post['id']} · {status_labels.get(post['status'], post['status'])}\n"
+            f"{schedule_text}\n{post['text'][:300]}", reply_markup=keyboard,
+        )
 
 
 @router.callback_query(F.data.startswith("post:"))
@@ -544,7 +614,15 @@ async def save_edited_time(message: Message, state: FSMContext):
                                       run_time=__import__("json").dumps(schedule))
         else:
             run_time = datetime.strptime(message.text.strip(), "%H:%M").strftime("%H:%M")
-            database.update_post_time(post["id"], message.from_user.id, run_time=run_time)
+            if post["occurrences_total"] is not None:
+                start_date = datetime.fromisoformat(post["next_run_at"]).astimezone(TASHKENT).date() if post["next_run_at"] else datetime.now(TASHKENT).date()
+                new_run_at = datetime.combine(start_date, datetime.strptime(run_time, "%H:%M").time()).replace(tzinfo=TASHKENT)
+                while new_run_at <= datetime.now(TASHKENT):
+                    new_run_at += timedelta(days=post["interval_days"])
+                database.update_post_time(post["id"], message.from_user.id,
+                                          run_time=run_time, next_run_at=new_run_at.isoformat())
+            else:
+                database.update_post_time(post["id"], message.from_user.id, run_time=run_time)
         cancel_job(post["id"])
         refreshed, _ = database.get_post(post["id"], message.from_user.id)
         schedule_post(message.bot, refreshed)

@@ -6,7 +6,7 @@ Telegram bot for admin-specific link buttons and scheduled channel posts.
 
 Use Python 3.12 and install `requirements.txt`. Set `TOKEN` in the environment, then run `python main.py`. The existing `tugmabot.db` is migrated in place: its `users` rows and saved links are retained, and the scheduling/channel tables are added.
 
-Only the five admin IDs in `handlers.py` can use the bot. Link settings remain separate per admin. The bot can preview and schedule a post once, daily, or on chosen weekdays, and will rebuild its schedule from SQLite after a restart.
+Only the five admin IDs in `handlers.py` can use the bot. Link settings remain separate per admin. A new post can be scheduled for 1, 2, 3, 5, 7, 10, 15, or 30 occurrences. Choose daily or every other day, then enter one posting time; the post appears in the scheduled-posts list after confirmation. The bot rebuilds its schedule from SQLite after a restart. Older once, daily, and weekly schedules remain supported.
 
 ## Northflank deployment
 

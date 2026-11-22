@@ -61,6 +61,26 @@ class DatabaseMigrationTests(unittest.TestCase):
         self.assertEqual(ids, {f"post-{post_id}-w0", f"post-{post_id}-w3"})
         cancel_job(post_id)
 
+    def test_limited_every_other_day_post_counts_each_occurrence_once(self):
+        database.init_db()
+        database.add_channel("Andijon", "Kanal", "-1001234567893")
+        with database.connect() as conn:
+            channel_id = conn.execute("SELECT id FROM channels").fetchone()[0]
+            conn.execute("UPDATE channels SET can_post=1 WHERE id=?", (channel_id,))
+        post_id = database.create_post(
+            1255705034, "Sinov", None, "daily", [channel_id], run_time="09:00",
+            occurrences_total=2, interval_days=2,
+            next_run_at="2026-11-24T09:00:00+05:00",
+        )
+        key = "2026-11-24T09:00:00+05:00"
+        post = database.advance_limited_post(post_id, key)
+        self.assertEqual(post["occurrences_sent"], 1)
+        self.assertEqual(post["next_run_at"], "2026-11-26T09:00:00+05:00")
+        self.assertIsNone(database.advance_limited_post(post_id, key))
+        post = database.advance_limited_post(post_id, post["next_run_at"])
+        self.assertEqual(post["status"], "published")
+        self.assertEqual(post["occurrences_sent"], 2)
+
 
 if __name__ == "__main__":
     unittest.main()

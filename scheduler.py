@@ -66,7 +66,8 @@ async def _send_to_channel(bot: Bot, post, channel, occurrence_key: str) -> bool
     return False
 
 
-async def publish_post(bot: Bot, post_id: int, occurrence_key: str, once: bool = False) -> None:
+async def publish_post(bot: Bot, post_id: int, occurrence_key: str, once: bool = False,
+                       count_limited: bool = False) -> None:
     with database.connect() as db:
         post = db.execute("SELECT * FROM scheduled_posts WHERE id=?", (post_id,)).fetchone()
         channels = db.execute(
@@ -83,6 +84,13 @@ async def publish_post(bot: Bot, post_id: int, occurrence_key: str, once: bool =
     succeeded = bool(channels) and all(result is True for result in results)
     if once:
         database.set_post_result(post_id, "published" if succeeded else "error")
+    elif count_limited:
+        if succeeded:
+            next_post = database.advance_limited_post(post_id, occurrence_key)
+            if next_post and next_post["status"] == "active":
+                schedule_post(bot, next_post)
+        else:
+            database.set_post_result(post_id, "error")
     elif not succeeded:
         database.set_post_result(post_id, "error")
 
@@ -92,6 +100,20 @@ def schedule_post(bot: Bot, post) -> None:
     job_id = f"post-{post_id}"
     cancel_job(post_id)
     if post["status"] in {"paused", "published", "deleted"}:
+        return
+    if post["occurrences_total"] is not None:
+        if post["status"] != "active" or int(post["occurrences_sent"] or 0) >= int(post["occurrences_total"]):
+            return
+        if not post["next_run_at"]:
+            database.set_post_result(post_id, "error")
+            return
+        run_at = _as_local(post["next_run_at"])
+        if run_at <= datetime.now(TASHKENT):
+            run_at = datetime.now(TASHKENT)
+        scheduler.add_job(publish_post, DateTrigger(run_date=run_at),
+                          id=job_id,
+                          args=[bot, post_id, post["next_run_at"], False, True],
+                          misfire_grace_time=86400, coalesce=True, max_instances=1)
         return
     if post["schedule_type"] == "once":
         if post["status"] != "pending" or not post["run_at"]:
@@ -125,7 +147,7 @@ def schedule_post(bot: Bot, post) -> None:
 
 def restore_jobs(bot: Bot) -> None:
     with database.connect() as db:
-        posts = db.execute("SELECT * FROM scheduled_posts WHERE status IN ('pending','active','error')").fetchall()
+        posts = db.execute("SELECT * FROM scheduled_posts WHERE status IN ('pending','active')").fetchall()
     for post in posts:
         try:
             schedule_post(bot, post)

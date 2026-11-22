@@ -67,6 +67,11 @@ def init_db() -> None:
             run_at TEXT,
             weekdays TEXT NOT NULL DEFAULT '[]',
             run_time TEXT,
+            interval_days INTEGER NOT NULL DEFAULT 1,
+            occurrences_total INTEGER,
+            occurrences_sent INTEGER NOT NULL DEFAULT 0,
+            next_run_at TEXT,
+            last_occurrence_key TEXT,
             timezone TEXT NOT NULL DEFAULT 'Asia/Tashkent',
             status TEXT NOT NULL DEFAULT 'pending',
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -99,6 +104,17 @@ def init_db() -> None:
             db.execute("UPDATE published_messages SET telegram_chat_id=(SELECT telegram_id FROM channels WHERE channels.id=published_messages.channel_id)")
         if "is_photo" not in published_columns:
             db.execute("ALTER TABLE published_messages ADD COLUMN is_photo INTEGER NOT NULL DEFAULT 0")
+        post_columns = {row["name"] for row in db.execute("PRAGMA table_info(scheduled_posts)")}
+        migrations = {
+            "interval_days": "INTEGER NOT NULL DEFAULT 1",
+            "occurrences_total": "INTEGER",
+            "occurrences_sent": "INTEGER NOT NULL DEFAULT 0",
+            "next_run_at": "TEXT",
+            "last_occurrence_key": "TEXT",
+        }
+        for column, definition in migrations.items():
+            if column not in post_columns:
+                db.execute(f"ALTER TABLE scheduled_posts ADD COLUMN {column} {definition}")
 
 
 def backup_database(retain_days: int = 7) -> Path | None:
@@ -192,12 +208,15 @@ def delete_channel(channel_id: int) -> None:
 
 def create_post(admin_id: int, text: str, photo_file_id: str | None, schedule_type: str,
                 channel_ids: list[int], run_at: str | None = None,
-                weekdays: list[int] | None = None, run_time: str | None = None) -> int:
+                weekdays: list[int] | None = None, run_time: str | None = None,
+                occurrences_total: int | None = None, interval_days: int = 1,
+                next_run_at: str | None = None) -> int:
     with connect() as db:
         cur = db.execute(
-            "INSERT INTO scheduled_posts(admin_id,text,photo_file_id,schedule_type,run_at,weekdays,run_time,status) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO scheduled_posts(admin_id,text,photo_file_id,schedule_type,run_at,weekdays,run_time,status,occurrences_total,interval_days,next_run_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (admin_id, text, photo_file_id, schedule_type, run_at,
-             json.dumps(weekdays or []), run_time, "pending" if schedule_type == "once" else "active"),
+             json.dumps(weekdays or []), run_time, "pending" if schedule_type == "once" else "active",
+             occurrences_total, interval_days, next_run_at),
         )
         post_id = cur.lastrowid
         db.executemany("INSERT INTO scheduled_post_channels(post_id,channel_id) VALUES(?,?)",
@@ -244,12 +263,32 @@ def update_post_content(post_id: int, admin_id: int, text: str | None = None,
 
 
 def update_post_time(post_id: int, admin_id: int, run_at: str | None = None,
-                     weekdays: list[int] | None = None, run_time: str | None = None) -> bool:
+                     weekdays: list[int] | None = None, run_time: str | None = None,
+                     next_run_at: str | None = None) -> bool:
     with connect() as db:
-        cur = db.execute("UPDATE scheduled_posts SET run_at=COALESCE(?,run_at),weekdays=COALESCE(?,weekdays),run_time=COALESCE(?,run_time),status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND admin_id=?",
+        cur = db.execute("UPDATE scheduled_posts SET run_at=COALESCE(?,run_at),weekdays=COALESCE(?,weekdays),run_time=COALESCE(?,run_time),next_run_at=COALESCE(?,next_run_at),status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND admin_id=?",
                          (run_at, json.dumps(weekdays) if weekdays is not None else None,
-                          run_time, "pending" if run_at is not None else "active", post_id, admin_id))
+                          run_time, next_run_at, "pending" if run_at is not None else "active", post_id, admin_id))
         return cur.rowcount > 0
+
+
+def advance_limited_post(post_id: int, occurrence_key: str):
+    """Advance a finite campaign exactly once for each completed occurrence."""
+    with connect() as db:
+        post = db.execute("SELECT * FROM scheduled_posts WHERE id=?", (post_id,)).fetchone()
+        if not post or post["last_occurrence_key"] == occurrence_key:
+            return None
+        sent = int(post["occurrences_sent"] or 0) + 1
+        total = int(post["occurrences_total"] or 0)
+        if sent >= total:
+            db.execute("UPDATE scheduled_posts SET occurrences_sent=?,last_occurrence_key=?,next_run_at=NULL,status='published',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (sent, occurrence_key, post_id))
+        else:
+            current = datetime.fromisoformat(occurrence_key)
+            next_run = current + timedelta(days=int(post["interval_days"] or 1))
+            db.execute("UPDATE scheduled_posts SET occurrences_sent=?,last_occurrence_key=?,next_run_at=?,status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                       (sent, occurrence_key, next_run.isoformat(), post_id))
+        return db.execute("SELECT * FROM scheduled_posts WHERE id=?", (post_id,)).fetchone()
 
 
 def replace_post_channels(post_id: int, admin_id: int, channel_ids: list[int]) -> bool:
