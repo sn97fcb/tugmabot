@@ -453,10 +453,53 @@ async def save_repeat(message: Message, state: FSMContext):
 
 @router.message(F.text == "📅 Rejadagi e'lonlar")
 async def list_posts(message: Message):
-    posts = database.list_posts(message.from_user.id)
-    if not posts:
-        await message.answer("Rejalashtirilgan e’lon yo‘q.")
+    regions = database.list_regions()
+    if not regions:
+        await message.answer("Hududlar hali qo‘shilmagan. Avval 📍 Hududlar va kanallar bo‘limidan hudud qo‘shing.")
         return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=region["name"], callback_data=f"posts:region:{region['id']}")]
+        for region in regions
+    ])
+    await message.answer("Rejadagi e’lonlarni ko‘rish uchun hududni tanlang:", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "posts:regions")
+async def show_post_regions(call: CallbackQuery):
+    regions = database.list_regions()
+    if not regions:
+        await call.message.edit_text("Hududlar hali qo‘shilmagan.")
+        await call.answer()
+        return
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=region["name"], callback_data=f"posts:region:{region['id']}")]
+        for region in regions
+    ])
+    await call.message.edit_text("Rejadagi e’lonlarni ko‘rish uchun hududni tanlang:", reply_markup=keyboard)
+    await call.answer()
+
+
+@router.callback_query(F.data.startswith("posts:region:"))
+async def list_region_posts(call: CallbackQuery):
+    region_id = int(call.data.rsplit(":", 1)[1])
+    region = next((row for row in database.list_regions() if row["id"] == region_id), None)
+    if not region:
+        await call.answer("Hudud topilmadi", show_alert=True)
+        return
+    posts = database.list_posts_for_region(call.from_user.id, region_id)
+    back = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="↩️ Hududlarga qaytish", callback_data="posts:regions")
+    ]])
+    if not posts:
+        await call.message.edit_text(f"📅 {region['name']} hududida rejadagi e’lon yo‘q.", reply_markup=back)
+        await call.answer()
+        return
+    await call.message.edit_text(f"📅 {region['name']} hududidagi rejadagi e’lonlar:", reply_markup=back)
+    await _send_post_cards(call.message, posts)
+    await call.answer()
+
+
+async def _send_post_cards(message: Message, posts):
     for post in posts:
         status_labels = {
             "pending": "Kutilmoqda", "active": "Faol", "paused": "To‘xtatilgan",

@@ -229,6 +229,17 @@ def list_posts(admin_id: int):
         return db.execute("SELECT * FROM scheduled_posts WHERE admin_id=? ORDER BY id DESC", (admin_id,)).fetchall()
 
 
+def list_posts_for_region(admin_id: int, region_id: int):
+    with connect() as db:
+        return db.execute(
+            "SELECT DISTINCT p.* FROM scheduled_posts p "
+            "JOIN scheduled_post_channels pc ON pc.post_id=p.id "
+            "JOIN channels c ON c.id=pc.channel_id "
+            "WHERE p.admin_id=? AND c.region_id=? ORDER BY p.id DESC",
+            (admin_id, region_id),
+        ).fetchall()
+
+
 def get_post(post_id: int, admin_id: int):
     with connect() as db:
         post = db.execute("SELECT * FROM scheduled_posts WHERE id=? AND admin_id=?", (post_id, admin_id)).fetchone()
